@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM 路由示範</title>
+  <meta name="description" content="左邊與 auto 對話，右邊即時呈現 SystemOne 路由大腦如何決定問題該送往哪個模型。">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Mac 上使用系統的 Helvetica Neue 與蘋方；其他系統才會下載 Inter 與 Noto Sans TC -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="/css/app.css">
+  <script>
+    try { const t = localStorage.getItem('router-demo:theme'); if (t) document.documentElement.dataset.theme = t; } catch {}
+  </script>
+</head>
+<body>
+  <a class="skip" href="#input">跳到輸入框</a>
+
+  <div class="app">
+    <header class="masthead">
+      <h1 class="wordmark"><span class="wm-pre">LLM </span>路由示範</h1>
+
+      <div class="pane-switch" role="tablist" aria-label="切換畫面">
+        <button role="tab" aria-selected="true" data-pane="chat">對話</button>
+        <button role="tab" aria-selected="false" data-pane="router">路由</button>
+      </div>
+
+      <div class="masthead-end">
+        <button class="status" id="brainStatus" type="button" title="路由大腦狀態，點擊開啟設定">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span class="status-name">SystemOne</span>
+          <span class="status-model" id="brainModelLabel">Microsoft-Decision-1</span>
+          <span class="status-state" id="brainStateLabel">連線中</span>
+        </button>
+        <button class="icon-btn" id="themeBtn" type="button" aria-label="切換深色模式" title="切換深色模式">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16.5 12.2A7 7 0 0 1 7.8 3.5a7 7 0 1 0 8.7 8.7z"/></svg>
+        </button>
+        <button class="icon-btn" id="settingsBtn" type="button" aria-label="設定" title="設定">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h8M15 6h2M3 14h2M9 14h8"/><rect x="11" y="4" width="4" height="4"/><rect x="5" y="12" width="4" height="4"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="panes" data-active="chat">
+      <!-- 對話 -->
+      <section class="pane chat" aria-labelledby="chatTitle">
+        <header class="chat-head">
+          <h2 id="chatTitle">對話</h2>
+          <p class="chat-model">模型 <strong id="chatModelLabel">auto</strong><span id="chatModelNote"></span></p>
+          <button class="text-btn" id="newChatBtn" type="button">新對話</button>
+        </header>
+
+        <div class="messages" id="messages" aria-live="polite"></div>
+
+        <form class="composer" id="composer">
+          <label class="sr-only" for="input">輸入問題</label>
+          <div class="composer-box">
+            <textarea id="input" rows="1" placeholder="輸入問題" autocomplete="off"></textarea>
+            <button class="send-btn" id="sendBtn" type="submit" aria-label="送出" disabled>
+              <svg class="i-send" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16V4M4.5 9.5 10 4l5.5 5.5"/></svg>
+              <svg class="i-stop" viewBox="0 0 20 20" aria-hidden="true"><rect x="5" y="5" width="10" height="10"/></svg>
+            </button>
+          </div>
+          <p class="composer-hint">Enter 送出，Shift + Enter 換行</p>
+        </form>
+      </section>
+
+      <!-- 路由 -->
+      <section class="pane router" aria-labelledby="modeName">
+        <nav class="strategies" id="strategies" aria-label="路由策略"></nav>
+
+        <div class="stage">
+          <header class="stage-head">
+            <div class="stage-text">
+              <h2 class="stage-title"><span id="modeName">階層式</span><span class="stage-en" id="modeEn">Cascade</span></h2>
+              <p class="stage-summary" id="modeSummary"></p>
+            </div>
+            <div class="stage-tools">
+              <div class="mode-controls" id="modeControls"></div>
+              <button class="line-btn" id="replayBtn" type="button" disabled>
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10a6 6 0 1 0 1.8-4.3M4 3.5v3h3"/></svg>
+                重播
+              </button>
+            </div>
+          </header>
+
+          <div class="map" id="map">
+            <svg class="map-svg" aria-hidden="true"></svg>
+            <div class="map-labels" aria-hidden="true"></div>
+            <ul class="map-key" id="legend" aria-label="路線顏色"></ul>
+          </div>
+
+          <div class="arrival" id="arrival" aria-live="polite"></div>
+        </div>
+
+        <aside class="inspector" aria-label="路由細節">
+          <div class="tabs" role="tablist">
+            <button role="tab" id="tab-trace" aria-controls="panel-trace" aria-selected="true">決策軌跡</button>
+            <button role="tab" id="tab-signals" aria-controls="panel-signals" aria-selected="false" tabindex="-1">大腦訊號</button>
+            <button role="tab" id="tab-compare" aria-controls="panel-compare" aria-selected="false" tabindex="-1">策略比較</button>
+            <button role="tab" id="tab-raw" aria-controls="panel-raw" aria-selected="false" tabindex="-1">原始資料</button>
+          </div>
+          <div class="tab-panel" role="tabpanel" id="panel-trace" aria-labelledby="tab-trace" tabindex="0"></div>
+          <div class="tab-panel" role="tabpanel" id="panel-signals" aria-labelledby="tab-signals" tabindex="0" hidden></div>
+          <div class="tab-panel" role="tabpanel" id="panel-compare" aria-labelledby="tab-compare" tabindex="0" hidden></div>
+          <div class="tab-panel" role="tabpanel" id="panel-raw" aria-labelledby="tab-raw" tabindex="0" hidden></div>
+        </aside>
+      </section>
+    </main>
+  </div>
+
+  <dialog class="settings" id="settings" aria-labelledby="settingsTitle">
+    <form method="dialog">
+      <header>
+        <h2 id="settingsTitle">設定</h2>
+        <button class="icon-btn" value="close" aria-label="關閉">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg>
+        </button>
+      </header>
+
+      <div class="field">
+        <label for="setBrainModel">路由大腦模型</label>
+        <input id="setBrainModel" type="text" spellcheck="false">
+        <p class="help">送往 SystemOne 的 <code>model</code> 欄位。</p>
+      </div>
+
+      <div class="field row">
+        <div>
+          <label for="setSimulate">使用模擬訊號</label>
+          <p class="help">不呼叫 SystemOne，以本機規則模擬判斷結果，適合離線展示。</p>
+        </div>
+        <input id="setSimulate" type="checkbox" role="switch" class="switch">
+      </div>
+
+      <fieldset class="field">
+        <legend>動畫速度</legend>
+        <div class="segmented" id="setSpeed">
+          <label><input type="radio" name="speed" value="1.7"><span>慢</span></label>
+          <label><input type="radio" name="speed" value="1"><span>標準</span></label>
+          <label><input type="radio" name="speed" value="0.55"><span>快</span></label>
+        </div>
+      </fieldset>
+
+      <dl class="conn" id="connInfo"></dl>
+
+      <footer>
+        <button class="solid-btn" value="done">完成</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

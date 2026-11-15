@@ -1,0 +1,13 @@
+{
+  "name": "routerdemo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "LLM router demo: chat with the auto model on the left, watch SystemOne route the question on the right.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

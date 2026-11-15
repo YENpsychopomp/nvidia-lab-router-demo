@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "routerdemo",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["PORT=5190", "node", "server.js"],
+      "port": 5190
+    }
+  ]
+}
