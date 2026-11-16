@@ -14,14 +14,39 @@ const store = {
   set(k, v) { try { localStorage.setItem(`router-demo:${k}`, JSON.stringify(v)); } catch { /* 無痕模式等情況下略過 */ } },
 };
 
-const EXAMPLES = [
-  { kind: '閒聊', text: '早安！今天有點累，推薦一首適合早上聽的歌' },
-  { kind: '程式', text: '用 Python 實作一個 LRU Cache，並說明每個操作的時間複雜度' },
-  { kind: '隱私資料', text: '我的身分證字號是 A123456789，電話 0912345678，請幫我寫一份請假申請書' },
-  { kind: '深度分析', text: '比較 Transformer 與 Mamba 架構在長文本推理上的優缺點，並提出三個值得研究的方向' },
-  { kind: '翻譯', text: '把這句翻成英文：本公司將於下一季推出可地端部署的 AI 助理' },
-  { kind: '即時資訊', text: '今天台積電的股價是多少？最近有什麼重大新聞？' },
+// 範例問題依類別分組；每一題在不同策略下會走到不同的路線，方便展示。
+const EXAMPLE_GROUPS = [
+  { name: '日常', items: [
+    { kind: '閒聊', text: '早安！今天有點累，推薦一首適合早上聽的歌' },
+    { kind: '單一事實', text: '台灣最高的山是哪一座？' },
+    { kind: '改寫', text: '幫我把這段話改得更有禮貌：明天的會議我不去了，你們自己開' },
+    { kind: '翻譯', text: '把這句翻成英文：本公司將於下一季推出可地端部署的 AI 助理' },
+  ] },
+  { name: '不同語言', items: [
+    { kind: '簡體中文', text: '帮我写一段周末去爬山的朋友圈文案，轻松一点' },
+    { kind: '日文', text: '来週の会議の議題を三つ提案してください' },
+    { kind: '英文', text: 'Explain the difference between TCP and UDP in simple terms' },
+  ] },
+  { name: '專業領域', items: [
+    { kind: '程式', text: '用 Python 實作一個 LRU Cache，並說明每個操作的時間複雜度' },
+    { kind: '除錯', text: '這段 SQL 很慢該怎麼優化：SELECT * FROM orders WHERE YEAR(created_at) = 2023' },
+    { kind: '數學', text: '證明根號 2 是無理數，並說明每一步的推理' },
+    { kind: '醫療', text: '我爸爸有高血壓，正在吃降血壓藥，可以同時吃止痛藥嗎？劑量要注意什麼？' },
+    { kind: '法律', text: '房東不退押金，依台灣法律我可以怎麼處理？' },
+  ] },
+  { name: '隱私與機密', items: [
+    { kind: '個資', text: '我的身分證字號是 A123456789，電話 0912345678，請幫我寫一份請假申請書' },
+    { kind: '個資＋分析', text: '我的身分證字號是 A123456789，請比較三種保險方案的優缺點並分析哪個最適合我' },
+    { kind: '公司內部', text: '這是公司內部未公開的營收資料，請整理成一頁摘要：Q3 營收 12 億，毛利率 38%' },
+  ] },
+  { name: '深度與即時', items: [
+    { kind: '深度分析', text: '比較 Transformer 與 Mamba 架構在長文本推理上的優缺點，並提出三個值得研究的方向' },
+    { kind: '系統設計', text: '設計一個每秒處理十萬筆訂單的電商結帳系統，說明架構與取捨' },
+    { kind: '長篇輸出', text: '寫一篇 1500 字的報告，介紹台灣半導體產業的發展歷程' },
+    { kind: '即時資訊', text: '今天台積電的股價是多少？最近有什麼重大新聞？' },
+  ] },
 ];
+const EXAMPLES = EXAMPLE_GROUPS.flatMap((g) => g.items);
 
 // ---------------------------------------------------------------- 狀態
 
@@ -363,8 +388,11 @@ function renderEmpty() {
     <p>${tiered()
       ? `auto 會依右側選定的策略，把問題交給 LOW、MID 或 HIGH 模型回答；右側同步畫出 SystemOne 的判斷與經過的每一站。`
       : '右側會同步畫出 SystemOne 的判斷，以及問題經過的每一站。'}</p>
-    <ul class="examples">${EXAMPLES.map((e, i) => `<li><button class="example" type="button" data-example="${i}">
-      <span class="ex-kind">${esc(e.kind)}</span><span class="ex-text">${esc(e.text)}</span></button></li>`).join('')}</ul>
+    ${EXAMPLE_GROUPS.map((g) => `<section class="ex-group" aria-label="${esc(g.name)}">
+      <h4 class="ex-group-name">${esc(g.name)}</h4>
+      <ul class="examples">${g.items.map((e) => `<li><button class="example" type="button" data-example="${EXAMPLES.indexOf(e)}">
+        <span class="ex-kind">${esc(e.kind)}</span><span class="ex-text">${esc(e.text)}</span></button></li>`).join('')}</ul>
+    </section>`).join('')}
   </div>`;
 }
 
