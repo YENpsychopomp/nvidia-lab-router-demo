@@ -278,10 +278,13 @@ const rules = {
 
 // ---------------------------------------------------------------- 限制條件
 
+// 地端大模型應付不來，需要雲端能力。
+const needsCloud = (s, lvl) => lvl >= 3 || s.large_ok.p < 0.5;
+
 const privacy = {
   id: 'privacy', group: '限制條件', name: '隱私合規', en: 'Privacy', glyph: 'shield',
   summary: '偵測個資與機密內容；敏感資料只能留在地端，必要時先去識別化才送雲端。',
-  uses: ['contains_pii', 'sensitivity', 'complexity'],
+  uses: ['contains_pii', 'sensitivity', 'complexity', 'large_ok'],
   controls: [{ id: 'th', type: 'range', label: '敏感門檻', min: 0.2, max: 0.9, step: 0.05, value: 0.5, format: f2 }],
   graph: () => ({
     regions: [
@@ -308,18 +311,21 @@ const privacy = {
     if (sv >= c.th) {
       r.check('gate', 'warn', `敏感 ${f2(sv)} ≥ ${f2(c.th)}`, { title: '偵測到敏感資料', detail: `個資機率 ${pct(s.contains_pii.p)}，機密機率 ${pct(s.sensitivity.probs.confidential ?? 0)}。禁止原文送往雲端。`, tone: 'warn' });
       r.block('gate', 'gpt5', [0.42, 0.45], '封鎖', { title: '封鎖直連雲端', detail: '依資料治理政策，含個資的原文不可離開地端。', tone: 'block' });
-      if (lvl >= 4) {
+      // 與無敏感資料時的判斷一致：地端大模型應付不來（難度「困難」以上，或 70B 可勝任機率不到一半）
+      // 就需要雲端能力，這時先去識別化再送出；否則留在地端。
+      if (needsCloud(s, lvl)) {
+        const why = lvl >= 3 ? `難度「${LV[lvl]}」` : `70B 模型可勝任機率只有 ${pct(s.large_ok.p)}`;
         r.go('gate', 'mask');
-        r.check('mask', 'pass', '已遮罩個資', { title: '先去識別化', detail: `難度「${LV[lvl]}」需要雲端能力，遮罩身分證、電話等欄位後才放行。`, tone: 'pass' });
+        r.check('mask', 'pass', '已遮罩個資', { title: '先去識別化', detail: `${why}，需要雲端能力。遮罩身分證、電話等欄位後才放行。`, tone: 'pass' });
         r.go('mask', 'gpt5').arrive('gpt5', 'gpt5', '收到的是去識別化後的內容。');
-        return r.done('gpt5', 'gpt5', '含敏感資料但任務很難：遮罩個資後送雲端。');
+        return r.done('gpt5', 'gpt5', `含敏感資料且${why}：遮罩個資後送雲端。`);
       }
       const id = lvl <= 1 ? 'gemma' : 'llama';
       r.go('gate', id).arrive(id, id, '資料全程留在地端機房。');
       return r.done(id, id, `含敏感資料（${pct(sv)}），留在地端處理。`);
     }
     r.check('gate', 'pass', `敏感 ${f2(sv)} < ${f2(c.th)}`, { title: '未偵測到敏感資料', detail: `可以依難度「${LV[lvl]}」自由選擇地端或雲端。`, tone: 'pass' });
-    const id = lvl >= 3 ? 'gpt5' : lvl <= 1 ? 'gemma' : 'llama';
+    const id = needsCloud(s, lvl) ? 'gpt5' : lvl <= 1 ? 'gemma' : 'llama';
     r.go('gate', id).arrive(id, id);
     return r.done(id, id, `無敏感資料，依難度「${LV[lvl]}」選擇${MODELS[id].role}。`);
   },
