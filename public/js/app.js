@@ -744,7 +744,8 @@ function bind() {
   strategies.addEventListener('keydown', (e) => {
     const items = [...strategies.querySelectorAll('.strat')];
     const i = items.indexOf(document.activeElement);
-    const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    // 策略清單在桌面是直排、窄螢幕是橫排，四個方向鍵都能移動。
+    const d = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
     if (i < 0 || !d) return;
     e.preventDefault();
     items[(i + d + items.length) % items.length].focus();
@@ -784,6 +785,24 @@ function bind() {
   for (const b of document.querySelectorAll('.pane-switch button')) b.addEventListener('click', () => showPane(b.dataset.pane));
 
   bindZoom();
+  bindInspector();
+}
+
+// 路由細節側欄可開合（桌面版）；預設在寬螢幕展開，選擇會記住。
+function bindInspector() {
+  const btn = $('#inspectorBtn');
+  const panes = $('.panes');
+  const set = (open) => {
+    panes.dataset.inspector = open ? 'open' : 'closed';
+    btn.setAttribute('aria-expanded', String(open));
+    $('#inspectorBtnText').textContent = open ? '收合細節' : '路由細節';
+  };
+  set(store.get('inspector', matchMedia('(min-width: 1500px)').matches));
+  btn.addEventListener('click', () => {
+    const open = panes.dataset.inspector !== 'open';
+    set(open);
+    store.set('inspector', open);
+  });
 }
 
 // 平移縮放只有 React Flow 版的路線圖才有。
