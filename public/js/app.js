@@ -39,7 +39,23 @@ const state = {
 };
 if (!MODE_MAP[state.modeId]) state.modeId = 'cascade';
 
-const map = new RouteMap($('#map'));
+// 路線圖預設使用 React Flow 版本（flow.js）；載入失敗或網址帶 ?map=classic 時，
+// 退回內建的 SVG 版本（map.js）。兩者介面相同，其餘程式不必區分。
+async function createMap(root) {
+  if (new URLSearchParams(location.search).get('map') !== 'classic') {
+    try {
+      const { FlowMap } = await import('./flow.js');
+      return new FlowMap(root);
+    } catch (err) {
+      root.classList.remove('is-flow');
+      console.warn('[map] React Flow 路線圖無法載入，改用內建的 SVG 路線圖。', err);
+    }
+  }
+  root.classList.add('is-classic');
+  return new RouteMap(root);
+}
+
+const map = await createMap($('#map'));
 let playToken = 0;
 let qSeq = 0;
 let mSeq = 0;
@@ -162,6 +178,8 @@ async function playRoute(q) {
   const run = ++playToken;
   state.currentQ = q.id;
   map.speed = state.settings.speed;
+  // 沿路線移動的點帶著問題的開頭幾個字。
+  map.cargo = truncate(q.text.replace(/\s+/g, ' ').trim(), 10);
   map.load(m.graph());
   $('#replayBtn').disabled = false;
   state.trace = [];
@@ -228,11 +246,16 @@ function renderArrival(arg) {
 
 // ---------------------------------------------------------------- 檢視器
 
+// 只有剛加入的那一步播放進場動畫；其餘步驟維持原樣，內容不依賴動畫才看得見。
+let traceShown = 0;
+
 function renderTrace() {
   const panel = $('#panel-trace');
+  const grew = state.trace.length > traceShown;
+  traceShown = state.trace.length;
   if (!state.trace.length) { panel.innerHTML = '<p class="panel-empty">每一步路由判斷會依序列在這裡，像一條直式路線圖，並標出 SystemOne 的回覆時間。</p>'; return; }
-  panel.innerHTML = `<ol class="trace">${state.trace.map((t) => `
-    <li class="tt-${t.tone}" style="${t.tone === 'arrive' ? `--c:${lineVar(t.line)}` : ''}">
+  panel.innerHTML = `<ol class="trace">${state.trace.map((t, i) => `
+    <li class="tt-${t.tone}${grew && i === state.trace.length - 1 ? ' is-new' : ''}" style="${t.tone === 'arrive' ? `--c:${lineVar(t.line)}` : ''}">
       <span class="t-stop" aria-hidden="true"></span>
       <div class="t-head"><span class="t-title">${esc(t.title)}</span>${t.time != null ? `<span class="t-time">${t.time} ms</span>` : ''}</div>
       ${t.detail ? `<p class="t-detail">${esc(t.detail)}</p>` : ''}
@@ -759,6 +782,28 @@ function bind() {
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', renderThemeIcon);
 
   for (const b of document.querySelectorAll('.pane-switch button')) b.addEventListener('click', () => showPane(b.dataset.pane));
+
+  bindZoom();
+}
+
+// 平移縮放只有 React Flow 版的路線圖才有。
+// 按鈕用 aria-disabled 表示不可用，按到極限時鍵盤焦點才不會消失。
+function bindZoom() {
+  if (!map.zoomBy) return;
+  const set = (sel, off) => $(sel).setAttribute('aria-disabled', String(off));
+  map.onView = (v) => {
+    $('#mapZoom').hidden = !v.interactive;
+    set('#zoomInBtn', !v.canZoomIn);
+    set('#zoomOutBtn', !v.canZoomOut);
+    set('#zoomResetBtn', !v.moved);
+  };
+  map.onView(map.viewState());
+  const on = (sel, fn) => $(sel).addEventListener('click', (e) => {
+    if (e.currentTarget.getAttribute('aria-disabled') !== 'true') fn();
+  });
+  on('#zoomInBtn', () => map.zoomBy(1));
+  on('#zoomOutBtn', () => map.zoomBy(-1));
+  on('#zoomResetBtn', () => map.resetView(true));
 }
 
 function showPane(name) {

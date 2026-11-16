@@ -10,7 +10,7 @@ const DOMAIN_NAMES = SIGNALS.find((s) => s.key === 'domain').options;
 const level = (s) => Math.max(0, Math.min(4, Math.round(s.complexity.level)));
 const sensitivity = (s) => Math.max(s.contains_pii.p, s.sensitivity.probs.confidential ?? 0);
 
-const Q = (x, y) => ({ id: 'q', kind: 'source', x, y, name: '使用者問題', lp: 'b' });
+const Q = (x, y) => ({ id: 'q', kind: 'source', x, y, name: '使用者問題', lp: 't' });
 const BRAIN = (x, y, sub) => ({ id: 'brain', kind: 'brain', x, y, name: 'SystemOne', sub, lp: 'b' });
 const ST = (model, x, y, o = {}) => ({ id: model, kind: 'station', model, x, y, lp: 'b', ...o });
 const GATE = (id, x, y, name, o = {}) => ({ id, kind: 'gate', x, y, name, lp: 't', ...o });
@@ -48,7 +48,8 @@ const cascade = {
       { x0: 0.31, y0: 0.34, y1: 0.66, label: '地端機房', line: 'dc' },
       { x0: 0.31, y0: 0.66, y1: 1.0, label: '地端邊緣', line: 'edge' },
     ],
-    nodes: [Q(0.05, 0.5), BRAIN(0.19, 0.5, '預測各層可處理機率'), ST('gemma', 0.45, 0.82), ST('llama', 0.66, 0.5), ST('gpt5', 0.87, 0.17)],
+    // 階梯往右上爬升，站牌放在右下角才不會壓到進出站的斜線。
+    nodes: [Q(0.05, 0.5), BRAIN(0.19, 0.5, '預測各層可處理機率'), ST('gemma', 0.4, 0.83), ST('llama', 0.56, 0.5, { lp: 'br' }), ST('gpt5', 0.72, 0.17, { lp: 'br' })],
     edges: [E('q', 'brain'), E('brain', 'gemma'), E('gemma', 'llama'), E('llama', 'gpt5')],
   }),
   decide(s, c) {
@@ -111,8 +112,8 @@ const cost = {
   controls: [],
   graph: () => ({
     nodes: [
-      Q(0.05, 0.7), BRAIN(0.18, 0.7, '估算所需品質'),
-      ...COST_LINE.map((id, i) => ST(id, 0.37 + i * 0.165, 0.7, { sub: `$${MODELS[id].price[0]} ／ $${MODELS[id].price[1]}`, maxw: 108 })),
+      Q(0.04, 0.7), BRAIN(0.15, 0.7, '估算所需品質'),
+      ...COST_LINE.map((id, i) => ST(id, 0.32 + i * 0.195, 0.7, { sub: `$${MODELS[id].price[0]} ／ $${MODELS[id].price[1]}`, maxw: 132 })),
     ],
     edges: [E('q', 'brain'), E('brain', 'gemma', { style: 'straight' }), E('gemma', 'llama', { style: 'straight' }), E('llama', 'mini', { style: 'straight' }), E('mini', 'gpt5', { style: 'straight' })],
     decor: drawQualityBars,
@@ -245,7 +246,7 @@ const rules = {
     nodes: [
       Q(0.05, 0.06), { id: 'engine', kind: 'engine', x: 0.34, y: 0.06, name: '規則引擎', sub: '由上而下比對', lp: 'r' },
       ...RULES.map((ru, i) => ({ id: ru.id, kind: 'switch', x: 0.34, y: 0.23 + i * 0.17, name: ru.label, lp: 'l' })),
-      ...RULES.map((ru, i) => ST(ru.model, 0.7, 0.23 + i * 0.17, { lp: 'r' })),
+      ...RULES.map((ru, i) => ST(ru.model, 0.62, 0.23 + i * 0.17, { lp: 'r' })),
       ST('gpt5', 0.34, 0.94, { sub: '預設路由', lp: 'r' }),
     ],
     edges: [
@@ -284,18 +285,18 @@ const privacy = {
   controls: [{ id: 'th', type: 'range', label: '敏感門檻', min: 0.2, max: 0.9, step: 0.05, value: 0.5, format: f2 }],
   graph: () => ({
     regions: [
-      { x0: 0.02, y0: 0.03, x1: 0.98, y1: 0.45, label: '雲端', line: 'cloud' },
-      { x0: 0.02, y0: 0.55, x1: 0.98, y1: 0.97, label: '地端信任邊界：資料不出機房', line: 'dc' },
+      { x0: 0.0, y0: 0.02, x1: 1.0, y1: 0.4, label: '雲端', line: 'cloud' },
+      { x0: 0.0, y0: 0.5, x1: 1.0, y1: 0.99, label: '地端信任邊界：資料不出機房', line: 'dc' },
     ],
     nodes: [
-      Q(0.06, 0.76), BRAIN(0.19, 0.76, '偵測個資與機密'),
-      GATE('gate', 0.34, 0.76, '含敏感資料？', { lp: 'b' }),
-      { id: 'mask', kind: 'engine', x: 0.52, y: 0.5, name: '去識別化閘道', lp: 'r' },
-      ST('gpt5', 0.82, 0.22, { lp: 'r' }), ST('llama', 0.66, 0.76, { lp: 'r' }), ST('gemma', 0.66, 0.9, { lp: 'r' }),
+      Q(0.05, 0.68), BRAIN(0.19, 0.68, '偵測個資與機密'),
+      GATE('gate', 0.42, 0.68, '含敏感資料？', { lp: 'b' }),
+      { id: 'mask', kind: 'engine', x: 0.58, y: 0.45, name: '去識別化閘道', lp: 'r' },
+      ST('gpt5', 0.72, 0.13, { lp: 'br' }), ST('llama', 0.64, 0.68, { lp: 'r' }), ST('gemma', 0.64, 0.86, { lp: 'r' }),
     ],
     edges: [
       E('q', 'brain'), E('brain', 'gate'),
-      E('gate', 'gpt5', { via: [[0.34, 0.22]] }), E('gate', 'mask'), E('mask', 'gpt5', { bend: 1 }),
+      E('gate', 'gpt5', { via: [[0.42, 0.13]] }), E('gate', 'mask'), E('mask', 'gpt5', { bend: 1 }),
       E('gate', 'llama'), E('gate', 'gemma'),
     ],
   }),
@@ -306,7 +307,7 @@ const privacy = {
     r.go('brain', 'gate');
     if (sv >= c.th) {
       r.check('gate', 'warn', `敏感 ${f2(sv)} ≥ ${f2(c.th)}`, { title: '偵測到敏感資料', detail: `個資機率 ${pct(s.contains_pii.p)}，機密機率 ${pct(s.sensitivity.probs.confidential ?? 0)}。禁止原文送往雲端。`, tone: 'warn' });
-      r.block('gate', 'gpt5', [0.34, 0.5], '封鎖', { title: '封鎖直連雲端', detail: '依資料治理政策，含個資的原文不可離開地端。', tone: 'block' });
+      r.block('gate', 'gpt5', [0.42, 0.45], '封鎖', { title: '封鎖直連雲端', detail: '依資料治理政策，含個資的原文不可離開地端。', tone: 'block' });
       if (lvl >= 4) {
         r.go('gate', 'mask');
         r.check('mask', 'pass', '已遮罩個資', { title: '先去識別化', detail: `難度「${LV[lvl]}」需要雲端能力，遮罩身分證、電話等欄位後才放行。`, tone: 'pass' });
@@ -408,15 +409,16 @@ const ensemble = {
   controls: [],
   graph: () => ({
     nodes: [
-      Q(0.05, 0.5), BRAIN(0.17, 0.5, '評估風險與難度'),
-      GATE('gate', 0.33, 0.5, '需要共識？', { lp: 'b' }),
-      ST('llama', 0.58, 0.16, { lp: 'r' }), ST('gpt5', 0.58, 0.5, { lp: 't' }), ST('reason', 0.58, 0.84, { lp: 'r' }),
-      { id: 'agg', kind: 'agg', x: 0.84, y: 0.5, name: '彙整器', sub: `${MODELS.gpt5.name} 交叉比對`, lp: 'b' },
+      Q(0.04, 0.5), BRAIN(0.15, 0.5, '評估風險與難度'),
+      GATE('gate', 0.33, 0.5, '需要共識？'),
+      ST('llama', 0.67, 0.14, { maxw: 112 }), ST('gpt5', 0.67, 0.5, { maxw: 112 }), ST('reason', 0.67, 0.86, { maxw: 112 }),
+      { id: 'agg', kind: 'agg', x: 0.95, y: 0.5, name: '彙整器', sub: `${MODELS.gpt5.name} 交叉比對`, lp: 'b' },
     ],
+    // 三條路線平行前進：出門後分開、到彙整器前才收攏，站牌放在各自路線的下方。
     edges: [
       E('q', 'brain'), E('brain', 'gate'),
-      E('gate', 'llama'), E('gate', 'gpt5'), E('gate', 'reason'),
-      E('llama', 'agg'), E('gpt5', 'agg'), E('reason', 'agg'),
+      E('gate', 'llama', { bend: 0.4 }), E('gate', 'gpt5'), E('gate', 'reason', { bend: 0.4 }),
+      E('llama', 'agg', { bend: 1 }), E('gpt5', 'agg'), E('reason', 'agg', { bend: 1 }),
     ],
   }),
   decide(s) {
@@ -450,7 +452,7 @@ const fallback = {
   graph: () => ({
     nodes: [
       Q(0.05, 0.5), BRAIN(0.18, 0.5, '評估最低可接受層級'),
-      ST('gpt5', 0.42, 0.5, { sub: '主要節點' }), ST('llama', 0.64, 0.5, { sub: '備援節點 1' }), ST('gemma', 0.86, 0.5, { sub: '備援節點 2' }),
+      ST('gpt5', 0.38, 0.5, { sub: '主要節點' }), ST('llama', 0.63, 0.5, { sub: '備援節點 1' }), ST('gemma', 0.88, 0.5, { sub: '備援節點 2' }),
     ],
     edges: [E('q', 'brain'), E('brain', 'gpt5'), E('gpt5', 'llama', { dashed: true }), E('llama', 'gemma', { dashed: true })],
   }),
@@ -531,8 +533,8 @@ const hybrid = {
         Q(0.05, 0.07), { ...BRAIN(x, 0.07, '一次取得所有訊號'), lp: 'r' },
         GATE('d1', x, ys[0], '敏感資料？', { lp: 'l' }), GATE('d2', x, ys[1], '需即時資訊？', { lp: 'l' }), GATE('d3', x, ys[2], '程式任務？', { lp: 'l' }),
         GATE('d4', x, ys[3], '高難度或高風險？', { lp: 'l' }), GATE('d5', x, ys[4], '只是寒暄？', { lp: 'l' }),
-        ST('llama', 0.7, ys[0], { id: 'p_llama', sub: '隱私保護', lp: 'r' }), ST('search', 0.7, ys[1], { lp: 'r' }), ST('coder', 0.7, ys[2], { lp: 'r' }),
-        ST('gpt5', 0.7, ys[3], { lp: 'r' }), ST('gemma', 0.7, ys[4], { lp: 'r' }), ST('llama', x, 0.95, { sub: '預設路由', lp: 'r' }),
+        ST('llama', 0.62, ys[0], { id: 'p_llama', sub: '隱私保護', lp: 'r' }), ST('search', 0.62, ys[1], { lp: 'r' }), ST('coder', 0.62, ys[2], { lp: 'r' }),
+        ST('gpt5', 0.62, ys[3], { lp: 'r' }), ST('gemma', 0.62, ys[4], { lp: 'r' }), ST('llama', x, 0.95, { sub: '預設路由', lp: 'r' }),
       ],
       edges: [
         E('q', 'brain', { style: 'straight' }), E('brain', 'd1', { style: 'straight' }), E('d1', 'd2', { style: 'straight' }), E('d2', 'd3', { style: 'straight' }),

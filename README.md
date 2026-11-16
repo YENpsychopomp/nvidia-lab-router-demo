@@ -10,7 +10,7 @@ cp .env.example .env   # 第一次使用時
 npm start              # http://localhost:5180
 ```
 
-不需要安裝任何套件（Node 18 以上）。金鑰只存在伺服器端，瀏覽器透過 `/api/*` 代理呼叫 LiteLLM。
+不需要安裝任何套件（Node 18 以上）。金鑰只存在伺服器端，瀏覽器透過 `/api/*` 代理呼叫 LiteLLM。路線圖使用的 React 與 React Flow 已打包在 `public/vendor/`，執行時不需要 `npm install`，也不經過 CDN。
 
 沒有金鑰時，聊天會提示設定金鑰，路由面板則以本機規則模擬 SystemOne 的回答，仍可完整展示。設定面板也能手動切換「使用模擬訊號」，適合離線展示。
 
@@ -42,8 +42,25 @@ SystemOne 不太能分辨繁體與簡體中文，所以文字中有明確的繁�
 
 聊天請求會附上一段系統提示，要求以使用者的語言回答、中文一律用繁體與台灣用語。可在 `.env` 用 `CHAT_SYSTEM_PROMPT=` 改寫，留空則不送出。
 
+## 路線圖
+
+路線圖以 [React Flow](https://reactflow.dev)（`@xyflow/react`）繪製：模型是有路線色條的站牌，抵達時整塊亮起；沿路線移動的紅點帶著問題開頭的文字。
+
+- 桌面版可以拖曳平移、用滾輪或右上角的按鈕縮放，「回到完整路線圖」會還原檢視。重播同一個問題時保留目前的縮放位置，切換策略才會還原。
+- 寬度 860px 以下時路線圖位於可捲動的頁面中，所以停用平移縮放，改成左右捲動，播放時畫面會跟著問題移動。
+- 網址加上 `?map=classic` 會改用內建的 SVG 路線圖（`public/js/map.js`）；React Flow 模組無法載入時也會自動退回這個版本。兩者共用同一份路線資料與播放邏輯。
+
+`public/vendor/flow-kit.js` 是 React、React DOM 與 React Flow 打包成的單一 ES module，只有升級版本時才需要重新產生：
+
+```bash
+cd tools/flow-kit
+npm install
+npm run build
+```
+
 ## 自訂
 
 - 路由目標的模型名稱、延遲、單價：`public/js/catalog.js`（單價與延遲為示意值）
 - 送給 SystemOne 的訊號問題：`public/js/brain.js` 的 `SIGNALS`
 - 各策略的路線圖與決策邏輯：`public/js/modes.js`
+- 路線圖的站點、站牌與軌道元件：`public/js/flow.js`；外觀與色票：`public/css/app.css`

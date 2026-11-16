@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "routerdemo",
-      "runtimeExecutable": "env",
-      "runtimeArgs": ["PORT=5190", "node", "server.js"],
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["-e", "process.env.PORT='5190';import('./server.js')"],
       "port": 5190
     }
   ]

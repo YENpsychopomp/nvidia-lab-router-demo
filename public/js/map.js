@@ -33,6 +33,8 @@ function rounded(pts, r = 18) {
   for (let i = 1; i < pts.length - 1; i++) {
     const p0 = pts[i - 1], p1 = pts[i], p2 = pts[i + 1];
     const l1 = Math.hypot(p1.x - p0.x, p1.y - p0.y), l2 = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    // 相鄰兩點重疊時（例如 bend 為 0 或 1）沒有轉角可以修圓，直接略過，避免除以零產生 NaN。
+    if (l1 < 0.01 || l2 < 0.01) continue;
     const rr = Math.min(r, l1 / 2, l2 / 2);
     const a = { x: p1.x + ((p0.x - p1.x) * rr) / l1, y: p1.y + ((p0.y - p1.y) * rr) / l1 };
     const b = { x: p1.x + ((p2.x - p1.x) * rr) / l2, y: p1.y + ((p2.y - p1.y) * rr) / l2 };
