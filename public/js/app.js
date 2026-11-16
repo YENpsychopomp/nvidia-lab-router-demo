@@ -195,7 +195,9 @@ function brainTrace(b) {
       tone: 'brain', time: b.latencyMs,
     };
   }
-  return { title: 'SystemOne 判斷完成', detail: `${b.response?.model ?? brainModel()} 回答了 ${n} 個訊號問題。`, tone: 'brain', time: b.latencyMs };
+  const masked = b.deid?.current?.entities.length;
+  const deid = masked ? `問題送出前已在本機遮罩 ${masked} 處個資。` : '';
+  return { title: 'SystemOne 判斷完成', detail: `${deid}${b.response?.model ?? brainModel()} 回答了 ${n} 個訊號問題。`, tone: 'brain', time: b.latencyMs };
 }
 
 async function playRoute(q) {
@@ -230,6 +232,7 @@ async function playRoute(q) {
   const ok = await map.play(decision.steps, (t) => { if (run === playToken) addTrace(t); });
   if (!ok || run !== playToken) return;
   renderArrival({ decision, q });
+  markMask(q);
 }
 
 function decisionStats(decision, q) {
@@ -305,6 +308,7 @@ function renderSignals() {
     if (s.type === 'noul') {
       num = v.p.toFixed(2);
       viz = `<div class="sig-bar"><i style="width:${pct(v.p)}"></i></div>`;
+      if (v.corrected) viz += `<div class="sig-opts"><span class="sig-fix">本機 PII 模型修正</span><span>偵測到${esc(v.corrected.categories.join('、'))}，SystemOne 原判 ${v.corrected.from.toFixed(2)}</span></div>`;
     } else if (s.type === 'choice') {
       num = pct(v.confidence);
       const top = Object.entries(v.probs).sort((a, b) => b[1] - a[1]).slice(0, 3);
@@ -353,7 +357,9 @@ function renderRaw() {
   const q = currentQuery();
   if (!q?.brain) { panel.innerHTML = '<p class="panel-empty">送出問題後，這裡會顯示送往 SystemOne 的完整請求與回應 JSON。</p>'; return; }
   const b = q.brain;
-  const note = b.error ? `<p class="raw-note">實際呼叫失敗（${esc(b.error.message)}），下方回應為模擬資料。</p>` : b.simulated ? '<p class="raw-note">模擬模式：未實際呼叫 API，回應由本機規則產生，格式與 SystemOne 相同。</p>' : '';
+  let note = b.error ? `<p class="raw-note">實際呼叫失敗（${esc(b.error.message)}），下方回應為模擬資料。</p>` : b.simulated ? '<p class="raw-note">模擬模式：未實際呼叫 API，回應由本機規則產生，格式與 SystemOne 相同。</p>' : '';
+  const n = b.deid?.current?.entities.length ?? 0;
+  if (b.deid && !b.simulated) note += `<p class="raw-note is-info">${n ? `問題送往 SystemOne 前已在本機遮罩 ${n} 處個資，下方請求是實際送出的內容。` : '問題送往 SystemOne 前已在本機檢查，未偵測到個資。'}</p>`;
   panel.innerHTML = `<div class="raw">${note}
     <section><h3>請求 POST /v1/systemone<button class="copy" type="button" data-copy="request">複製</button></h3><pre>${highlight(b.request)}</pre></section>
     <section><h3>回應 ${b.latencyMs} ms<button class="copy" type="button" data-copy="response">複製</button></h3><pre>${highlight(b.response)}</pre></section>
@@ -426,7 +432,7 @@ function appendMessage(msg) {
     const turn = messagesEl.querySelector('.turn:last-of-type');
     const el = document.createElement('div');
     el.className = 'a';
-    el.innerHTML = '<details class="think" hidden><summary></summary><div class="think-body"></div></details><div class="md"></div><div class="bot-meta"></div>';
+    el.innerHTML = '<div class="deid" hidden></div><details class="think" hidden><summary></summary><div class="think-body"></div></details><div class="md"></div><div class="bot-meta"></div>';
     turn.appendChild(el);
     msg.el = el;
     updateBot(msg);
@@ -466,6 +472,7 @@ function updateBot(msg) {
   const body = msg.el.querySelector('.md');
   const meta = msg.el.querySelector('.bot-meta');
   renderThinking(msg);
+  renderDeid(msg);
   if (msg.status === 'error') {
     body.innerHTML = errorNotice(msg.error);
     meta.innerHTML = '';
@@ -493,6 +500,33 @@ function updateBot(msg) {
   if (mt.usage?.completion_tokens) parts.push(`<span>${mt.usage.completion_tokens} tokens</span>`);
   if (msg.status === 'stopped') parts.push('<span>已停止</span>');
   meta.innerHTML = parts.join('');
+}
+
+// 去識別化：顯示雲端模型實際收到的問題，個資代號以標記呈現。
+function renderDeid(msg) {
+  const box = msg.el.querySelector('.deid');
+  const d = msg.meta.deid;
+  box.hidden = !d;
+  if (!d || box.dataset.done) return;
+  box.dataset.done = '1';
+  const n = d.current?.entities.length ?? 0;
+  const engine = d.engine === 'model' ? `PII 模型 ${d.model}＋規則` : '規則比對（PII 模型未載入）';
+  const head = n
+    ? `送往雲端前已遮罩 <strong>${n}</strong> 處個資`
+    : '送往雲端前已檢查，<strong>未偵測到個資</strong>';
+  const extra = d.historyMasked ? `，另遮罩歷史對話 ${d.historyMasked} 處` : '';
+  const text = d.current ? esc(d.current.text).replace(/〔[^〕]{1,12}〕/g, (m) => `<mark>${m}</mark>`) : '';
+  box.innerHTML = `<p class="deid-head"><span class="deid-icon" aria-hidden="true"></span>${head}${extra}</p>
+    ${n ? `<p class="deid-label">雲端模型收到的內容</p><p class="deid-text">${text}</p>` : ''}
+    <p class="deid-engine">${esc(engine)}，在本機執行${d.ms ? ` ${d.ms} ms` : ''}${d.note ? `；${esc(d.note)}` : ''}</p>`;
+}
+
+// 路線圖上的去識別化閘道標出實際遮罩的數量。
+function markMask(q) {
+  const n = q.deid?.current?.entities.length;
+  if (n == null || q.id !== state.currentQ || !map.nodes?.get('mask')) return;
+  const st = map.nodes.get('mask').state;
+  if (st === 'visited' || st === 'target') map.setNode('mask', { badge: { tone: 'pass', text: n ? `已遮罩 ${n} 處個資` : '未偵測到個資' } });
 }
 
 // 推理模型先串流思考過程：思考時展開並即時顯示，開始回答後自動收合。
@@ -534,13 +568,18 @@ async function streamChat(msg, q) {
   msg.t0 = t0;
   try {
     let tier;
-    if (tiered()) {
+    let deidentify = false;
+    if (tiered() || q.mode.deidentifyCloud) {
       msg.status = 'routing';
       updateBot(msg);
       const { mode: m, decision, exec } = await q.routePromise;
       if (ac.signal.aborted) throw new DOMException('aborted', 'AbortError');
-      tier = exec.tier;
-      msg.meta.route = { modeName: m.name, target: decision.label ?? MODELS[decision.model].name, ...exec };
+      // 隱私合規策略：決定送往雲端時，整段對話先在伺服器去識別化。
+      deidentify = Boolean(m.deidentifyCloud) && exec.tier === 'high';
+      if (tiered()) {
+        tier = exec.tier;
+        msg.meta.route = { modeName: m.name, target: decision.label ?? MODELS[decision.model].name, ...exec };
+      }
       msg.status = 'streaming';
       updateBot(msg);
       t0 = performance.now();
@@ -549,7 +588,7 @@ async function streamChat(msg, q) {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ messages: history, tier }),
+      body: JSON.stringify({ messages: history, tier, deidentify }),
       signal: ac.signal,
     });
     if (!res.ok) {
@@ -573,6 +612,13 @@ async function streamChat(msg, q) {
         let j;
         try { j = JSON.parse(data); } catch { continue; }
         if (j.error) throw Object.assign(new Error(j.error.message ?? '串流錯誤'), { status: j.error.code });
+        if (j.deid) {
+          msg.meta.deid = j.deid;
+          q.deid = j.deid;
+          markMask(q);
+          queueRender(msg);
+          continue;
+        }
         if (j.model) msg.meta.model = j.model;
         if (j.usage) msg.meta.usage = j.usage;
         const d = j.choices?.[0]?.delta ?? {};
@@ -608,7 +654,7 @@ async function send(text) {
   input.value = '';
   autoGrow();
   await configReady;
-  const q = { id: ++qSeq, text, brain: null };
+  const q = { id: ++qSeq, text, brain: null, mode: mode() };
   q.brainPromise = askBrain(text, { simulate: simulate(), model: brainModel() }).then((b) => {
     q.brain = b;
     state.brainError = b.error ?? null;
@@ -679,8 +725,18 @@ function openSettings() {
     <dt>聊天端點</dt><dd>${esc(state.cfg.chatEndpoint || state.cfg.endpoint || '—')}</dd>
     <dt>聊天模型</dt><dd>${tiered()
       ? `${esc(state.cfg.chatModel)}，依路由決策選擇<br>LOW ${esc(TIER_MODELS.low)}<br>MID ${esc(TIER_MODELS.mid)}<br>HIGH ${esc(TIER_MODELS.high)}`
-      : `${esc(state.cfg.chatModel)}`}</dd>`;
+      : `${esc(state.cfg.chatModel)}`}</dd>
+    <dt>個資偵測</dt><dd id="piiInfo">${piiInfo(state.cfg.pii)}</dd>`;
   dlg.showModal();
+  // 模型在背景載入，打開設定時重新取得目前狀態。
+  fetch('/api/config').then((r) => r.json()).then((c) => { state.cfg.pii = c.pii; $('#piiInfo').innerHTML = piiInfo(c.pii); }).catch(() => {});
+}
+
+function piiInfo(p) {
+  if (!p) return '—';
+  if (p.state === 'ready') return `<span class="ok">${esc(p.model)}</span>＋規則，在本機執行。送往 SystemOne 的問題一律先遮罩；隱私合規策略送往雲端時，整段對話也會先遮罩。`;
+  if (p.state === 'loading') return `${esc(p.model)} 載入中，完成前先用規則比對。`;
+  return `<span class="bad">只用規則比對</span>：${esc(p.error ?? 'PII 模型未載入')}`;
 }
 
 function closeSettings() {

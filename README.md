@@ -10,7 +10,7 @@ cp .env.example .env   # 第一次使用時
 npm start              # http://localhost:5180
 ```
 
-不需要安裝任何套件（Node 18 以上）。金鑰只存在伺服器端，瀏覽器透過 `/api/*` 代理呼叫 LiteLLM。路線圖使用的 React 與 React Flow 已打包在 `public/vendor/`，執行時不需要 `npm install`，也不經過 CDN。
+基本功能不需要安裝任何套件（Node 18 以上）。金鑰只存在伺服器端，瀏覽器透過 `/api/*` 代理呼叫 LiteLLM。要啟用本機的個資偵測模型，另外執行一次 `npm install` 與 `npm run pii:download`，詳見下方〈個資去識別化〉。路線圖使用的 React 與 React Flow 已打包在 `public/vendor/`，執行時不需要 `npm install`，也不經過 CDN。
 
 沒有金鑰時，聊天會提示設定金鑰，路由面板則以本機規則模擬 SystemOne 的回答，仍可完整展示。設定面板也能手動切換「使用模擬訊號」，適合離線展示。
 
@@ -41,6 +41,35 @@ npm start              # http://localhost:5180
 SystemOne 不太能分辨繁體與簡體中文，所以文字中有明確的繁體或簡體字形時，會在本機修正語言判斷，並在決策軌跡與大腦訊號中標示「字形修正」。原始資料分頁顯示的仍是 SystemOne 的原始回應。
 
 聊天請求會附上一段系統提示，要求以使用者的語言回答、中文一律用繁體與台灣用語。可在 `.env` 用 `CHAT_SYSTEM_PROMPT=` 改寫，留空則不送出。
+
+## 個資去識別化
+
+個資偵測在伺服器本機執行（`pii.js`），原文不會送到任何外部服務。兩種偵測器取聯集：
+
+- **PII 模型**：[OpenMed-PII-Chinese-BigMed-Large-278M](https://huggingface.co/OpenMed/OpenMed-PII-Chinese-BigMed-Large-278M-v1)（XLM-RoBERTa，int8 ONNX，Apache-2.0），以 transformers.js 推論，負責姓名、地址、帳號、生日等格式不固定的個資。一般問題約 10 ms，千字長文約 160 ms。
+- **規則**：台灣身分證與居留證、手機與市話、Email、信用卡號、銀行帳號、台灣地址、生日。
+
+偵測到的個資換成代號，例如 `〔姓名1〕`、`〔身分證號1〕`。同一個值在整段對話中對應同一個代號，模型仍看得出兩處指的是同一個人。
+
+在哪裡遮罩：
+
+| 請求 | 何時遮罩 |
+| --- | --- |
+| 送往 SystemOne（雲端）的問題 | 一律遮罩。SystemOne 因此看不到真正的號碼，「含個人資料」訊號會改用本機偵測結果修正（姓名以外的個資），並在「大腦訊號」分頁標示 |
+| 聊天請求 | 隱私合規策略決定送往雲端（HIGH）時，整段對話（含歷史與先前的回覆）先遮罩，再轉送 |
+
+對話欄會顯示雲端模型實際收到的內容，路線圖上的去識別化閘道標出遮罩數量。其他策略刻意不做去識別化，方便比較；它們送往雲端的聊天內容仍是原文。
+
+啟用模型：
+
+```bash
+npm install            # 安裝選用相依 @huggingface/transformers
+npm run pii:download   # 下載約 870 MB 的模型到 models/（已排除在 git 之外）
+```
+
+沒有安裝或下載時，伺服器只用規則比對，設定面板與對話欄會註明。
+
+限制：模型以簡體中文與合成資料訓練（官方 micro F1 0.74），繁體中文的姓名偶爾只抓到一部分；英文姓名抓不到；公眾人物的姓名也會被遮罩。
 
 ## 路線圖
 

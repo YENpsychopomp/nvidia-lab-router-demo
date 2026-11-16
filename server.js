@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { initPii, piiStatus, deidentify, detect } from './pii.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -87,12 +88,18 @@ function upstreamMessage(data, status) {
   return msg || `HTTP ${status}`;
 }
 
+// 去識別化後的內容裡，個資已換成〔類別編號〕代號；請模型照原樣保留代號，不要猜測原值。
+const DEID_PROMPT = '使用者訊息中形如〔姓名1〕、〔身分證號1〕的文字，是在本機去識別化後的個資代號。回答時請照原樣保留這些代號，不要猜測或補上原始內容。';
+
 const NO_KEY = { error: { code: 'no_key', message: '伺服器尚未設定 LITELLM_API_KEY。請在 .env 填入金鑰後重新啟動。' } };
 
 async function handleBrain(req, res) {
   if (!cfg.apiKey) return sendJson(res, 503, NO_KEY);
   const body = JSON.parse((await readBody(req)) || '{}');
-  const payload = { model: body.model || cfg.brainModel, questions: body.questions, state: body.state };
+  // SystemOne 在雲端：問題送出前一律先在本機遮罩個資。代號仍保留「這裡有身分證號」的資訊，
+  // 所以大腦依然判斷得出含個資，只是看不到原值。
+  const { messages: [masked], report } = await deidentify([{ role: 'user', content: String(body.state ?? '') }]);
+  const payload = { model: body.model || cfg.brainModel, questions: body.questions, state: masked.content };
   const t0 = performance.now();
   try {
     const up = await fetch(`${cfg.baseUrl}/systemone`, {
@@ -108,7 +115,7 @@ async function handleBrain(req, res) {
     if (!up.ok) {
       return sendJson(res, up.status, { error: { code: 'upstream', status: up.status, message: upstreamMessage(data, up.status) }, latencyMs });
     }
-    sendJson(res, 200, { request: payload, response: data, latencyMs });
+    sendJson(res, 200, { request: payload, response: data, latencyMs, deid: report });
   } catch (err) {
     sendJson(res, 502, { error: { code: 'network', message: `無法連線到 SystemOne：${err.message}` } });
   }
@@ -118,13 +125,20 @@ async function handleChat(req, res) {
   if (!chat.apiKey) return sendJson(res, 503, NO_KEY);
   const body = JSON.parse((await readBody(req)) || '{}');
   const model = hasTiers ? chat.tiers[body.tier] || chat.tiers.mid : cfg.chatModel;
+  // 路由決定送往雲端、且策略要求去識別化時，整段對話（含歷史）在轉送前先遮罩。
+  let messages = Array.isArray(body.messages) ? body.messages : [];
+  let deid = null;
+  if (body.deidentify) {
+    ({ messages, report: deid } = await deidentify(messages));
+  }
+  const system = [cfg.systemPrompt, deid && DEID_PROMPT].filter(Boolean).join('\n');
   const ac = new AbortController();
   res.on('close', () => { if (!res.writableFinished) ac.abort(); });
   try {
     const up = await fetch(`${chat.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: upstreamHeaders(chat.apiKey),
-      body: JSON.stringify({ model, messages: cfg.systemPrompt ? [{ role: 'system', content: cfg.systemPrompt }, ...body.messages] : body.messages, stream: true }),
+      body: JSON.stringify({ model, messages: system ? [{ role: 'system', content: system }, ...messages] : messages, stream: true }),
       signal: ac.signal,
     });
     if (!up.ok) {
@@ -139,6 +153,8 @@ async function handleChat(req, res) {
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     });
+    // 第一個事件告訴瀏覽器實際送出的內容遮罩了哪些地方。
+    if (deid) res.write(`data: ${JSON.stringify({ deid })}\n\n`);
     for await (const chunk of up.body) res.write(chunk);
     res.end();
   } catch (err) {
@@ -176,10 +192,16 @@ const server = http.createServer(async (req, res) => {
         hasChatKey: Boolean(chat.apiKey),
         chatEndpoint: chat.baseUrl,
         chatTiers: hasTiers ? chat.tiers : null,
+        pii: piiStatus(),
       });
     }
     if (pathname === '/api/brain' && req.method === 'POST') return await handleBrain(req, res);
     if (pathname === '/api/chat' && req.method === 'POST') return await handleChat(req, res);
+    if (pathname === '/api/pii' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const text = String(body.text ?? '');
+      return sendJson(res, 200, { status: piiStatus(), entities: await detect(text), ...(await deidentify([{ role: 'user', content: text }])).report });
+    }
     if (req.method === 'GET' || req.method === 'HEAD') return await serveStatic(req, res);
     res.writeHead(405); res.end();
   } catch (err) {
@@ -202,4 +224,8 @@ server.listen(cfg.port, () => {
   console.log(`  chat       ${chat.baseUrl}`);
   console.log(`  chat model ${hasTiers ? `${cfg.chatModel} → LOW ${chat.tiers.low} / MID ${chat.tiers.mid} / HIGH ${chat.tiers.high}` : cfg.chatModel}`);
   console.log(`  api key    ${cfg.apiKey ? 'set' : 'missing (brain runs in simulated mode)'}`);
+  initPii(ROOT).then(() => {
+    const st = piiStatus();
+    console.log(`  pii        ${st.state === 'ready' ? `${st.model} (loaded in ${st.loadMs} ms)` : `rules only: ${st.error}`}`);
+  });
 });

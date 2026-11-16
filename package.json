@@ -5,9 +5,13 @@
   "type": "module",
   "description": "LLM router demo: chat with the auto model on the left, watch SystemOne route the question on the right.",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "pii:download": "node scripts/download-pii.mjs"
   },
   "engines": {
     "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@huggingface/transformers": "4.3.2"
   }
 }

@@ -156,6 +156,17 @@ export function refineLanguage(signals, text) {
   return signals;
 }
 
+// SystemOne 收到的是遮罩後的問題，看不到真正的號碼，「含個資」的機率會偏低。
+// 本機 PII 模型偵測到可識別個人的欄位（姓名以外）時，以它的結果修正這個訊號。
+export function refinePii(signals, deid) {
+  const found = (deid?.current?.entities ?? []).filter((e) => e.category !== '姓名');
+  if (!found.length) return signals;
+  const cur = signals.contains_pii;
+  if (cur.p >= 0.95) return signals;
+  signals.contains_pii = { ...cur, p: 0.95, corrected: { from: cur.p, count: found.length, categories: [...new Set(found.map((e) => e.category))] } };
+  return signals;
+}
+
 // ---------- 模擬大腦：沒有金鑰或離線展示時使用 ----------
 
 const RE = {
@@ -265,7 +276,7 @@ export async function askBrain(text, { simulate, model }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw Object.assign(new Error(data?.error?.message ?? `HTTP ${res.status}`), { status: res.status, code: data?.error?.code });
-      return { simulated: false, request: data.request ?? request, response: data.response, latencyMs: data.latencyMs, signals: refineLanguage(parseSignals(data.response), text) };
+      return { simulated: false, request: data.request ?? request, response: data.response, latencyMs: data.latencyMs, deid: data.deid ?? null, signals: refinePii(refineLanguage(parseSignals(data.response), text), data.deid) };
     } catch (err) {
       const fallback = await simulated(text, request);
       return { ...fallback, error: { message: err.message, status: err.status, code: err.code } };

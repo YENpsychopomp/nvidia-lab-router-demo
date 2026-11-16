@@ -283,6 +283,8 @@ const needsCloud = (s, lvl) => lvl >= 3 || s.large_ok.p < 0.5;
 
 const privacy = {
   id: 'privacy', group: '限制條件', name: '隱私合規', en: 'Privacy', glyph: 'shield',
+  // 送往雲端的請求（含歷史對話）會在伺服器先經過 PII 模型去識別化。
+  deidentifyCloud: true,
   summary: '偵測個資與機密內容；敏感資料只能留在地端，必要時先去識別化才送雲端。',
   uses: ['contains_pii', 'sensitivity', 'complexity', 'large_ok'],
   controls: [{ id: 'th', type: 'range', label: '敏感門檻', min: 0.2, max: 0.9, step: 0.05, value: 0.5, format: f2 }],
