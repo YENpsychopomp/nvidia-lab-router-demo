@@ -8,7 +8,19 @@ const f2 = (v) => Number(v).toFixed(2);
 const LV = SIGNALS.find((s) => s.key === 'complexity').levels;
 const DOMAIN_NAMES = SIGNALS.find((s) => s.key === 'domain').options;
 const level = (s) => Math.max(0, Math.min(4, Math.round(s.complexity.level)));
-const sensitivity = (s) => Math.max(s.contains_pii.p, s.sensitivity.probs.confidential ?? 0);
+// 資料分級：公開、個人資料、營運資料（內部或機密）。個資遮罩後可以送雲端；
+// 營運數字、營業秘密本身就是要保護的內容，遮掉就無從分析，所以一律留在地端。
+function dataClass(s, th) {
+  const pii = s.contains_pii.p;
+  const conf = s.sensitivity.probs.confidential ?? 0;
+  const internal = s.sensitivity.probs.internal ?? 0;
+  const p = Math.max(pii, conf, internal);
+  let kind = 'public';
+  if (internal >= th || (conf >= th && pii < th)) kind = 'business';
+  else if (p >= th) kind = 'personal';
+  return { kind, p, pii, conf, internal };
+}
+const CLASS_NAME = { public: '公開', personal: '個人資料', business: '內部營運資料' };
 
 const Q = (x, y) => ({ id: 'q', kind: 'source', x, y, name: '使用者問題', lp: 't' });
 const BRAIN = (x, y, sub) => ({ id: 'brain', kind: 'brain', x, y, name: 'SystemOne', sub, lp: 'b' });
@@ -285,7 +297,7 @@ const privacy = {
   id: 'privacy', group: '限制條件', name: '隱私合規', en: 'Privacy', glyph: 'shield',
   // 送往雲端的請求（含歷史對話）會在伺服器先經過 PII 模型去識別化。
   deidentifyCloud: true,
-  summary: '偵測個資與機密內容；敏感資料只能留在地端，必要時先去識別化才送雲端。',
+  summary: '依資料分級決定去向：個資可先去識別化再送雲端；內部營運資料與營業秘密一律留在地端。',
   uses: ['contains_pii', 'sensitivity', 'complexity', 'large_ok'],
   controls: [{ id: 'th', type: 'range', label: '敏感門檻', min: 0.2, max: 0.9, step: 0.05, value: 0.5, format: f2 }],
   graph: () => ({
@@ -294,8 +306,8 @@ const privacy = {
       { x0: 0.0, y0: 0.5, x1: 1.0, y1: 0.99, label: '地端信任邊界：資料不出機房', line: 'dc' },
     ],
     nodes: [
-      Q(0.05, 0.68), BRAIN(0.19, 0.68, '偵測個資與機密'),
-      GATE('gate', 0.42, 0.68, '含敏感資料？', { lp: 'b' }),
+      Q(0.05, 0.68), BRAIN(0.19, 0.68, '判斷資料分級'),
+      GATE('gate', 0.42, 0.68, '資料分級', { lp: 'b' }),
       { id: 'mask', kind: 'engine', x: 0.58, y: 0.45, name: '去識別化閘道', lp: 'r' },
       ST('gpt5', 0.72, 0.13, { lp: 'br' }), ST('llama', 0.64, 0.68, { lp: 'r' }), ST('gemma', 0.64, 0.86, { lp: 'r' }),
     ],
@@ -307,29 +319,46 @@ const privacy = {
   }),
   decide(s, c) {
     const r = new Route();
-    const sv = sensitivity(s);
+    const d = dataClass(s, c.th);
     const lvl = level(s);
+    const breakdown = `個資 ${pct(d.pii)}、機密 ${pct(d.conf)}、內部 ${pct(d.internal)}`;
+    const cloud = needsCloud(s, lvl);
+    const why = lvl >= 3 ? `難度「${LV[lvl]}」` : `70B 模型可勝任機率只有 ${pct(s.large_ok.p)}`;
     r.go('brain', 'gate');
-    if (sv >= c.th) {
-      r.check('gate', 'warn', `敏感 ${f2(sv)} ≥ ${f2(c.th)}`, { title: '偵測到敏感資料', detail: `個資機率 ${pct(s.contains_pii.p)}，機密機率 ${pct(s.sensitivity.probs.confidential ?? 0)}。禁止原文送往雲端。`, tone: 'warn' });
-      r.block('gate', 'gpt5', [0.42, 0.45], '封鎖', { title: '封鎖直連雲端', detail: '依資料治理政策，含個資的原文不可離開地端。', tone: 'block' });
-      // 與無敏感資料時的判斷一致：地端大模型應付不來（難度「困難」以上，或 70B 可勝任機率不到一半）
-      // 就需要雲端能力，這時先去識別化再送出；否則留在地端。
-      if (needsCloud(s, lvl)) {
-        const why = lvl >= 3 ? `難度「${LV[lvl]}」` : `70B 模型可勝任機率只有 ${pct(s.large_ok.p)}`;
-        r.go('gate', 'mask');
-        r.check('mask', 'pass', '已遮罩個資', { title: '先去識別化', detail: `${why}，需要雲端能力。遮罩身分證、電話等欄位後才放行。`, tone: 'pass' });
-        r.go('mask', 'gpt5').arrive('gpt5', 'gpt5', '收到的是去識別化後的內容。');
-        return r.done('gpt5', 'gpt5', `含敏感資料且${why}：遮罩個資後送雲端。`);
+
+    if (d.kind === 'business') {
+      const top = d.internal >= d.conf ? `內部 ${f2(d.internal)}` : `機密 ${f2(d.conf)}`;
+      r.check('gate', 'warn', `${top} ≥ ${f2(c.th)}`, { title: '偵測到內部營運資料', detail: `${breakdown}。內容本身就是要保護的營運資訊，原文不可離開地端，也無法以遮罩替代。`, tone: 'warn' });
+      r.block('gate', 'gpt5', [0.42, 0.45], '封鎖', { title: '封鎖直連雲端', detail: '依資料治理政策，內部與機密資料不可送往外部雲端服務。', tone: 'block' });
+      r.block('gate', 'mask', [0.5, 0.565], '不可遮罩', { title: '不走去識別化', detail: 'PII 模型只遮個人資料；營收、毛利、營業秘密遮掉就無從分析，所以不能遮罩後送雲端。', tone: 'block' });
+      if (cloud) {
+        r.go('gate', 'llama').arrive('llama', 'llama', `${why}，原本需要雲端能力；受資料政策限制，改由地端最強的模型回答，品質可能受限。`);
+        return r.done('llama', 'llama', `內部營運資料不可上雲：雖然${why}，仍由地端最強的模型回答。`);
       }
       const id = lvl <= 1 ? 'gemma' : 'llama';
       r.go('gate', id).arrive(id, id, '資料全程留在地端機房。');
-      return r.done(id, id, `含敏感資料（${pct(sv)}），留在地端處理。`);
+      return r.done(id, id, `內部營運資料（${pct(d.p)}），留在地端處理。`);
     }
-    r.check('gate', 'pass', `敏感 ${f2(sv)} < ${f2(c.th)}`, { title: '未偵測到敏感資料', detail: `可以依難度「${LV[lvl]}」自由選擇地端或雲端。`, tone: 'pass' });
-    const id = needsCloud(s, lvl) ? 'gpt5' : lvl <= 1 ? 'gemma' : 'llama';
+
+    if (d.kind === 'personal') {
+      r.check('gate', 'warn', `個資 ${f2(d.p)} ≥ ${f2(c.th)}`, { title: '偵測到個人資料', detail: `${breakdown}。禁止原文送往雲端。`, tone: 'warn' });
+      r.block('gate', 'gpt5', [0.42, 0.45], '封鎖', { title: '封鎖直連雲端', detail: '依資料治理政策，含個資的原文不可離開地端。', tone: 'block' });
+      // 與公開資料的判斷一致：地端大模型應付不來就需要雲端能力，這時先去識別化再送出；否則留在地端。
+      if (cloud) {
+        r.go('gate', 'mask');
+        r.check('mask', 'pass', '已遮罩個資', { title: '先去識別化', detail: `${why}，需要雲端能力。遮罩身分證、電話等欄位後才放行。`, tone: 'pass' });
+        r.go('mask', 'gpt5').arrive('gpt5', 'gpt5', '收到的是去識別化後的內容。');
+        return r.done('gpt5', 'gpt5', `含個資且${why}：遮罩個資後送雲端。`);
+      }
+      const id = lvl <= 1 ? 'gemma' : 'llama';
+      r.go('gate', id).arrive(id, id, '資料全程留在地端機房。');
+      return r.done(id, id, `含個資（${pct(d.p)}），留在地端處理。`);
+    }
+
+    r.check('gate', 'pass', `敏感 ${f2(d.p)} < ${f2(c.th)}`, { title: '公開資料', detail: `${breakdown}，都低於門檻 ${pct(c.th)}，可以依難度「${LV[lvl]}」自由選擇地端或雲端。`, tone: 'pass' });
+    const id = cloud ? 'gpt5' : lvl <= 1 ? 'gemma' : 'llama';
     r.go('gate', id).arrive(id, id);
-    return r.done(id, id, `無敏感資料，依難度「${LV[lvl]}」選擇${MODELS[id].role}。`);
+    return r.done(id, id, `公開資料，依難度「${LV[lvl]}」選擇${MODELS[id].role}。`);
   },
 };
 
@@ -539,9 +568,9 @@ const hybrid = {
     return {
       nodes: [
         Q(0.05, 0.07), { ...BRAIN(x, 0.07, '一次取得所有訊號'), lp: 'r' },
-        GATE('d1', x, ys[0], '敏感資料？', { lp: 'l' }), GATE('d2', x, ys[1], '需即時資訊？', { lp: 'l' }), GATE('d3', x, ys[2], '程式任務？', { lp: 'l' }),
+        GATE('d1', x, ys[0], '敏感或內部資料？', { lp: 'l' }), GATE('d2', x, ys[1], '需即時資訊？', { lp: 'l' }), GATE('d3', x, ys[2], '程式任務？', { lp: 'l' }),
         GATE('d4', x, ys[3], '高難度或高風險？', { lp: 'l' }), GATE('d5', x, ys[4], '只是寒暄？', { lp: 'l' }),
-        ST('llama', 0.62, ys[0], { id: 'p_llama', sub: '隱私保護', lp: 'r' }), ST('search', 0.62, ys[1], { lp: 'r' }), ST('coder', 0.62, ys[2], { lp: 'r' }),
+        ST('llama', 0.62, ys[0], { id: 'p_llama', sub: '資料不出機房', lp: 'r' }), ST('search', 0.62, ys[1], { lp: 'r' }), ST('coder', 0.62, ys[2], { lp: 'r' }),
         ST('gpt5', 0.62, ys[3], { lp: 'r' }), ST('gemma', 0.62, ys[4], { lp: 'r' }), ST('llama', x, 0.95, { sub: '預設路由', lp: 'r' }),
       ],
       edges: [
@@ -555,11 +584,11 @@ const hybrid = {
   decide(s) {
     const r = new Route();
     const lvl = level(s);
-    const sv = sensitivity(s);
+    const d = dataClass(s, 0.5);
     const coding = s.domain.choice === 'coding' || (s.domain.probs.coding ?? 0) >= 0.5;
     const hard = lvl >= 4 || s.high_stakes.p >= 0.6 || s.large_ok.p < 0.5;
     const tests = [
-      ['d1', '含敏感資料', sv >= 0.5, f2(sv), `敏感機率 ${pct(sv)}`, 'p_llama', 'llama', '含敏感資料，留在地端機房。'],
+      ['d1', '含敏感或內部資料', d.kind !== 'public', CLASS_NAME[d.kind], `個資 ${pct(d.pii)}、機密 ${pct(d.conf)}、內部 ${pct(d.internal)}`, 'p_llama', 'llama', `屬於${CLASS_NAME[d.kind]}，留在地端機房。`],
       ['d2', '需要即時資訊', s.needs_fresh.p >= 0.5, f2(s.needs_fresh.p), `即時資訊機率 ${pct(s.needs_fresh.p)}`, 'search', 'search', '需要即時資訊，使用雲端模型加網路搜尋。'],
       ['d3', '屬於程式任務', coding, pct(s.domain.probs.coding ?? 0), `程式領域機率 ${pct(s.domain.probs.coding ?? 0)}`, 'coder', 'coder', '程式任務，交給地端程式專家。'],
       ['d4', '高難度或高風險', hard, LV[lvl], `70B 可勝任 ${pct(s.large_ok.p)}，錯誤代價 ${pct(s.high_stakes.p)}`, 'gpt5', 'gpt5', '超出地端模型能力或錯誤代價高，使用雲端旗艦模型。'],
